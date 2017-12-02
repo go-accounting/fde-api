@@ -74,6 +74,19 @@ func saveTransaction(r *repository, ps httprouter.Params, d decoder) (interface{
 	return r.Save(txs...)
 }
 
+func getTransaction(r *repository, ps httprouter.Params, d decoder) (interface{}, error) {
+	return r.Get(ps.ByName("txid"))
+}
+
+func updateTransaction(r *repository, ps httprouter.Params, d decoder) (interface{}, error) {
+	var tx *fde.Transaction
+	if err := d(tx); err != nil {
+		return nil, err
+	}
+	tx.Id = ps.ByName("txid")
+	return r.Save(tx)
+}
+
 func deleteTransaction(r *repository, ps httprouter.Params, d decoder) (interface{}, error) {
 	return r.Delete(ps.ByName("txid"))
 }
@@ -116,7 +129,8 @@ func main() {
 	accountsRepositorySettings = settings.Fde.AccountsRepository
 	router := httprouter.New()
 	router.POST("/charts-of-accounts/:coa/transactions", handler(saveTransaction))
-	router.PUT("/charts-of-accounts/:coa/transactions/:txid", handler(saveTransaction))
+	router.GET("/charts-of-accounts/:coa/transactions/:txid", handler(getTransaction))
+	router.PUT("/charts-of-accounts/:coa/transactions/:txid", handler(updateTransaction))
 	router.DELETE("/charts-of-accounts/:coa/transactions/:txid", handler(deleteTransaction))
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
