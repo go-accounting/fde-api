@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,11 +15,6 @@ import (
 
 var api *apisupport.Api
 
-var storeSettings map[string]interface{}
-var accountsRepositorySettings map[string]interface{}
-
-var newStoreAndAccountsRepository func(map[string]interface{}, map[string]interface{}, *string, *string) (interface{}, interface{}, error)
-
 type repository struct {
 	*fde.TxsRepository
 	user  string
@@ -30,43 +24,39 @@ type repository struct {
 var repositoryPool = sync.Pool{
 	New: func() interface{} {
 		r := &repository{}
-		v1, v2, err := newStoreAndAccountsRepository(storeSettings, accountsRepositorySettings, &r.user, &r.coaid)
+		v, err := api.Config().Run("NewFdeStoreAndAccountsRepository", &r.user, &r.coaid)
 		if err != nil {
 			panic(err)
 		}
-		r.TxsRepository = fde.NewTxsRepository(v1.(fde.Store), v2.(fde.AccountsRepository))
+		r.TxsRepository = fde.NewTxsRepository(
+			v.([]interface{})[0].(fde.Store),
+			v.([]interface{})[1].(fde.AccountsRepository),
+		)
 		return r
 	},
 }
 
-type decoder func(interface{}) error
-
 func handler(
-	f func(*repository, httprouter.Params, decoder) (interface{}, error),
+	f func(*repository, httprouter.Params, apisupport.Decoder) (interface{}, error),
 ) func(http.ResponseWriter, *http.Request, httprouter.Params) {
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-		user, err := api.UserFromRequest(r)
-		if api.Check(err, w) {
+		user := api.UserFromRequest(w, r)
+		if user == "" {
 			return
 		}
-		cr := repositoryPool.Get().(*repository)
-		cr.user = user
-		cr.coaid = ps.ByName("coa")
-		defer repositoryPool.Put(cr)
-		v, err := f(cr, ps, func(v interface{}) error {
-			return json.NewDecoder(r.Body).Decode(v)
+		tr := repositoryPool.Get().(*repository)
+		tr.user = user
+		tr.coaid = ps.ByName("coa")
+		defer repositoryPool.Put(tr)
+		api.Run(w, func() (interface{}, error) {
+			return f(tr, ps, func(v interface{}) error {
+				return api.Decode(r, v)
+			})
 		})
-		if api.Check(err, w) {
-			return
-		}
-		if v != nil {
-			w.Header().Set("Content-Type", "application/json")
-			api.Check(json.NewEncoder(w).Encode(v), w)
-		}
 	}
 }
 
-func saveTransaction(r *repository, ps httprouter.Params, d decoder) (interface{}, error) {
+func saveTransaction(r *repository, ps httprouter.Params, d apisupport.Decoder) (interface{}, error) {
 	var txs []*fde.Transaction
 	if err := d(&txs); err != nil {
 		return nil, err
@@ -74,11 +64,11 @@ func saveTransaction(r *repository, ps httprouter.Params, d decoder) (interface{
 	return r.Save(txs...)
 }
 
-func getTransaction(r *repository, ps httprouter.Params, d decoder) (interface{}, error) {
+func getTransaction(r *repository, ps httprouter.Params, _ apisupport.Decoder) (interface{}, error) {
 	return r.Get(ps.ByName("txid"))
 }
 
-func updateTransaction(r *repository, ps httprouter.Params, d decoder) (interface{}, error) {
+func updateTransaction(r *repository, ps httprouter.Params, d apisupport.Decoder) (interface{}, error) {
 	var tx *fde.Transaction
 	if err := d(tx); err != nil {
 		return nil, err
@@ -87,7 +77,7 @@ func updateTransaction(r *repository, ps httprouter.Params, d decoder) (interfac
 	return r.Save(tx)
 }
 
-func deleteTransaction(r *repository, ps httprouter.Params, d decoder) (interface{}, error) {
+func deleteTransaction(r *repository, ps httprouter.Params, _ apisupport.Decoder) (interface{}, error) {
 	return r.Delete(ps.ByName("txid"))
 }
 
@@ -96,37 +86,11 @@ func main() {
 		fmt.Printf("usage: %v settings", path.Base(os.Args[0]))
 		return
 	}
-	api = apisupport.NewApi()
-	var settings struct {
-		Fde struct {
-			PluginFile         string                 `yaml:"PluginFile"`
-			Store              map[string]interface{} `yaml:"Store"`
-			AccountsRepository map[string]interface{} `yaml:"AccountsRepository"`
-		} `yaml:"Fde"`
-		OpenId struct {
-			Provider string `yaml:"Provider"`
-			ClientId string `yaml:"ClientId"`
-		} `yaml:"OpenId"`
-	}
-	err := api.UnmarshalSettings(os.Args[1], &settings)
+	var err error
+	api, err = apisupport.New(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
 	}
-	api.SetClientCredentials(settings.OpenId.Provider, settings.OpenId.ClientId)
-	if api.Error() != nil {
-		log.Fatal(api.Error())
-	}
-	symbol, err := api.LoadSymbol(settings.Fde.PluginFile, "NewStoreAndAccountsRepository")
-	if err != nil {
-		log.Fatal(err)
-	}
-	newStoreAndAccountsRepository = symbol.(func(map[string]interface{}, map[string]interface{}, *string, *string) (interface{}, interface{}, error))
-	symbol, err = api.LoadSymbol(settings.Fde.PluginFile, "LoadSymbolFunction")
-	if err == nil {
-		*symbol.(*func(string, string) (interface{}, error)) = api.LoadSymbol
-	}
-	storeSettings = settings.Fde.Store
-	accountsRepositorySettings = settings.Fde.AccountsRepository
 	router := httprouter.New()
 	router.POST("/charts-of-accounts/:coa/transactions", handler(saveTransaction))
 	router.GET("/charts-of-accounts/:coa/transactions/:txid", handler(getTransaction))
