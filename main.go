@@ -70,7 +70,7 @@ func getTransaction(r *repository, ps httprouter.Params, _ apisupport.Decoder) (
 
 func updateTransaction(r *repository, ps httprouter.Params, d apisupport.Decoder) (interface{}, error) {
 	var tx *fde.Transaction
-	if err := d(tx); err != nil {
+	if err := d(&tx); err != nil {
 		return nil, err
 	}
 	tx.Id = ps.ByName("txid")
@@ -92,9 +92,9 @@ func main() {
 		log.Fatal(err)
 	}
 	router := httprouter.New()
-	router.POST("/charts-of-accounts/:coa/transactions", handler(saveTransaction))
-	router.GET("/charts-of-accounts/:coa/transactions/:txid", handler(getTransaction))
-	router.PUT("/charts-of-accounts/:coa/transactions/:txid", handler(updateTransaction))
-	router.DELETE("/charts-of-accounts/:coa/transactions/:txid", handler(deleteTransaction))
+	router.POST("/api/fde/:coa/transactions", handler(saveTransaction))
+	router.GET("/api/fde/:coa/transactions/:txid", handler(getTransaction))
+	router.PUT("/api/fde/:coa/transactions/:txid", handler(updateTransaction))
+	router.DELETE("/api/fde/:coa/transactions/:txid", handler(deleteTransaction))
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
